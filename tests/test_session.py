@@ -301,3 +301,35 @@ async def test_interrupt_suppresses_the_rejection_boilerplate(bot, config):
         TelegramSink(bot, 1),
     )
     assert bot.sent == []
+
+
+def test_each_session_is_given_its_own_id(bot, config):
+    """The CLI inherits CLAUDE_CODE_SESSION_ID from its parent, so two sessions
+    started from one process would otherwise collide on a single session id."""
+    import uuid
+
+    first = ChatSession(1, bot, config)._build_options().session_id
+    second = ChatSession(2, bot, config)._build_options().session_id
+
+    assert first and second and first != second
+    uuid.UUID(first)  # the CLI requires a UUID
+    uuid.UUID(second)
+
+
+def test_resuming_does_not_force_a_new_id(bot, config):
+    session = ChatSession(1, bot, config)
+    session.state.resume_from = "sess-from-yesterday"
+
+    options = session._build_options()
+
+    assert options.session_id is None
+    assert options.resume == "sess-from-yesterday"
+
+
+def test_options_carry_the_bots_own_workspace_and_settings(bot, config):
+    session = ChatSession(1, bot, config)
+    options = session._build_options()
+
+    assert options.cwd == str(config.workspace_root)
+    assert options.permission_mode == config.permission_mode
+    assert options.can_use_tool is session.broker

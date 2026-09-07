@@ -33,6 +33,10 @@ Built on the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk),
 so the session has the full Claude Code tool set — Read, Write, Edit, Bash,
 Glob, Grep, WebFetch, subagents, skills, MCP servers and your `CLAUDE.md`.
 
+Run **one bot per project**: define several in `bots.toml` and they come up
+together in one process, each with its own token, workspace and session, and
+nothing shared between them.
+
 ---
 
 ## ⚠️ Read this before you run it
@@ -66,8 +70,9 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
+cp bots.example.toml bots.toml     # several bots
+# ...or, for a single bot:
 cp .env.example .env
-$EDITOR .env
 ```
 
 You also need the Claude Code CLI on `PATH` — the SDK drives it:
@@ -77,18 +82,65 @@ npm install -g @anthropic-ai/claude-code
 claude login          # or set ANTHROPIC_API_KEY in .env
 ```
 
-Then fill in `.env`:
-
-- **`TELEGRAM_BOT_TOKEN`** — from [@BotFather](https://t.me/BotFather).
-- **`TELEGRAM_ALLOWED_USER_IDS`** — your numeric id, from
-  [@userinfobot](https://t.me/userinfobot). Comma-separated for several people.
-- **`CLAUDE_WORKSPACE`** — the directory the agent is confined to.
+Then configure. You need, per bot: a token from
+[@BotFather](https://t.me/BotFather), your numeric id from
+[@userinfobot](https://t.me/userinfobot), and a workspace directory.
 
 Run it:
 
 ```bash
-python -m claude_telegram_bot
+python -m claude_telegram_bot                 # bots.toml, or .env if absent
+python -m claude_telegram_bot /etc/bots.toml  # an explicit config file
 ```
+
+---
+
+## Several bots, one per project
+
+Create a separate bot in @BotFather for each project, then list them:
+
+```toml
+# bots.toml
+[defaults]
+allowed_user_ids = [11111111]
+permission_mode = "default"
+
+[bots.work]
+token_env = "WORK_BOT_TOKEN"
+workspace = "~/code/work"
+
+[bots.blog]
+token_env = "BLOG_BOT_TOKEN"
+workspace = "~/writing/blog"
+permission_mode = "acceptEdits"
+model = "claude-sonnet-5"
+```
+
+```
+2026-09-07 14:02:11 INFO | starting 2 bot(s): work (8412:***), blog (7735:***)
+2026-09-07 14:02:12 INFO | bot 'work' polling as @my_work_bot | workspace=/home/me/code/work ...
+2026-09-07 14:02:12 INFO | bot 'blog' polling as @my_blog_bot | workspace=/home/me/writing/blog ...
+2026-09-07 14:02:12 INFO | 2 bot(s) running; press Ctrl-C to stop
+```
+
+`[defaults]` sets anything the per-bot tables may override. Tokens can be
+inline (`token`) or, better, read from the environment (`token_env`), which a
+`.env` file next to `bots.toml` can supply.
+
+**What "isolated" means here.** Each bot builds its own session manager, its
+own permission registry and its own Claude sessions, so between two bots
+nothing is shared: not conversations, not "always allow" grants, not pending
+permission buttons — pressing one bot's button can never answer another's.
+Each Claude session is also given its own generated session id, because the
+CLI otherwise inherits `CLAUDE_CODE_SESSION_ID` from its parent environment
+and every session started from one process would land on the same id.
+
+Two bots may not share a token: Telegram allows a single poller per token, so
+they would steal each other's updates. The loader rejects that at startup
+rather than letting you debug it later.
+
+If `bots.toml` is absent, the bot falls back to single-bot mode from `.env`
+and behaves exactly as before.
 
 ---
 
@@ -116,13 +168,36 @@ and `/resume` start a new one on your next message.
 
 ## Configuration
 
-Everything lives in `.env` (see `.env.example` for the annotated version).
+`bots.toml` is the primary form (see `bots.example.toml`); `.env` is the
+single-bot fallback (see `.env.example`).
+
+### bots.toml
+
+| Key | Where | Purpose |
+| --- | --- | --- |
+| `token` / `token_env` | per bot | **Required.** The token, or the env var holding it |
+| `workspace` | per bot | **Required.** Directory that bot is confined to |
+| `allowed_user_ids` | either | **Required.** Numeric Telegram user ids |
+| `permission_mode` | either | `default`, `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions`, `auto` |
+| `model`, `effort` | either | Model id and reasoning effort |
+| `allowed_tools` | either | Tools approved without asking |
+| `disallowed_tools` | either | Tools the agent may never use |
+| `max_turns` | either | Cap on agentic turns per prompt |
+| `permission_timeout` | either | Seconds before an unanswered prompt auto-denies |
+| `verbose` | either | Start with thinking and tool results shown |
+
+"Either" means it can go in `[defaults]` and be overridden per bot. Unknown
+keys are an error, not a silent no-op, so a typo can't quietly disable a
+setting.
+
+### .env (single-bot fallback)
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | — | **Required.** BotFather token |
 | `TELEGRAM_ALLOWED_USER_IDS` | — | **Required.** Comma-separated user ids |
 | `ANTHROPIC_API_KEY` | — | Passed to the CLI; or run `claude login` |
+| `BOT_NAME` | `default` | Name shown in `/status` and the logs |
 | `CLAUDE_WORKSPACE` | `./workspace` | Directory the agent is confined to |
 | `CLAUDE_MODEL` | CLI default | Model alias or full id |
 | `CLAUDE_PERMISSION_MODE` | `default` | Starting permission mode |
@@ -142,6 +217,18 @@ without asking you.
 ## How it works
 
 ```
+                     runner.py  ── one process, N bots ──┐
+                         │                               │
+  bot "work" ── Application ── SessionManager ── ChatSession ── ClaudeSDKClient ─▸ claude CLI
+                 (own token)   (own registry)   (own cwd)                          ~/code/work
+
+  bot "blog" ── Application ── SessionManager ── ChatSession ── ClaudeSDKClient ─▸ claude CLI
+                 (own token)   (own registry)   (own cwd)                          ~/writing/blog
+```
+
+Within one bot:
+
+```
 Telegram  ──update──▸  handlers.py  ──prompt──▸  ChatSession
                                                      │
                                           ClaudeSDKClient (Agent SDK)
@@ -151,6 +238,13 @@ Telegram  ──update──▸  handlers.py  ──prompt──▸  ChatSession
 Telegram  ◂──messages──  TelegramSink  ◂──stream──  ChatSession._pump
 ```
 
+- **`runner.py`** starts every bot, waits for SIGINT/SIGTERM, then unwinds them
+  in reverse. It closes each bot's Claude sessions explicitly, because PTB runs
+  the `post_shutdown` hook only from `run_polling()` — which the multi-bot path
+  does not use, so the CLI subprocesses would otherwise be orphaned.
+- **`config.py`** loads `bots.toml` or falls back to `.env`, and refuses to
+  start on an empty allow-list, a missing workspace, a shared token or an
+  unknown key.
 - **`session.py`** holds one `ClaudeSDKClient` per chat and pumps
   `receive_response()` into the chat: text as messages, tool calls as labelled
   log lines, the `ResultMessage` as a duration/turns/cost footer.
@@ -158,7 +252,8 @@ Telegram  ◂──messages──  TelegramSink  ◂──stream──  ChatSess
   an inline keyboard and awaiting the tap. The SDK dispatches permission
   requests in their own task, so waiting for a human blocks only the tool call
   being asked about — `/stop` still gets through, and an interrupt denies
-  whatever is still pending.
+  whatever is still pending. Each bot owns its `PermissionRegistry`, so a
+  button press is routed only within the bot that asked.
 - **`render.py`** turns SDK message types into Telegram HTML: per-tool
   summaries, escaping, and splitting at line boundaries to stay under
   Telegram's 4096-character limit.
@@ -182,7 +277,9 @@ pytest
 
 The tests replace Telegram with a recording fake and the SDK client with a
 canned transcript, so the whole suite runs offline in about two seconds — no
-bot token and no API key needed.
+bot token and no API key needed. `tests/test_isolation.py` is the one that
+pins the multi-bot guarantees; `tests/test_runner.py` covers the start/stop
+lifecycle.
 
 ---
 

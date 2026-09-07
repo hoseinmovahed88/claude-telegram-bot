@@ -9,7 +9,25 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from claude_telegram_bot.config import Config  # noqa: E402
+from claude_agent_sdk import ToolPermissionContext  # noqa: E402
+
+from claude_telegram_bot.config import BotConfig  # noqa: E402
+
+
+def permission_context(**overrides) -> ToolPermissionContext:
+    fields = dict(
+        signal=None,
+        suggestions=[],
+        tool_use_id="t1",
+        agent_id=None,
+        blocked_path=None,
+        decision_reason=None,
+        title=None,
+        display_name=None,
+        description=None,
+    )
+    fields.update(overrides)
+    return ToolPermissionContext(**fields)
 
 
 @dataclass
@@ -55,8 +73,9 @@ def bot() -> FakeBot:
 
 
 @pytest.fixture
-def config(tmp_path: Path) -> Config:
-    return Config(
+def config(tmp_path: Path) -> BotConfig:
+    return BotConfig(
+        name="test",
         bot_token="1:test",
         allowed_user_ids=frozenset({42}),
         workspace_root=tmp_path,

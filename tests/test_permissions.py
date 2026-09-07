@@ -5,24 +5,17 @@ import asyncio
 from claude_agent_sdk import (
     PermissionResultAllow,
     PermissionResultDeny,
-    ToolPermissionContext,
 )
+from conftest import permission_context as _context
 
-from claude_telegram_bot.permissions import ALLOW, ALWAYS, DENY, STOP, PermissionBroker
-
-
-def _context() -> ToolPermissionContext:
-    return ToolPermissionContext(
-        signal=None,
-        suggestions=[],
-        tool_use_id="t1",
-        agent_id=None,
-        blocked_path=None,
-        decision_reason=None,
-        title=None,
-        display_name=None,
-        description=None,
-    )
+from claude_telegram_bot.permissions import (
+    ALLOW,
+    ALWAYS,
+    DENY,
+    STOP,
+    PermissionBroker,
+    PermissionRegistry,
+)
 
 
 async def _answer(broker: PermissionBroker, action: str) -> None:
@@ -32,7 +25,7 @@ async def _answer(broker: PermissionBroker, action: str) -> None:
             break
         await asyncio.sleep(0.005)
     request_id = next(iter(broker._pending))
-    assert PermissionBroker.dispatch(request_id, action) is not None
+    assert broker._registry.dispatch(request_id, action) is not None
 
 
 async def _ask(broker: PermissionBroker, action: str, tool: str = "Bash"):
@@ -44,7 +37,7 @@ async def _ask(broker: PermissionBroker, action: str, tool: str = "Bash"):
 
 
 async def test_allow_returns_the_original_input(bot, config):
-    broker = PermissionBroker(bot, 1, timeout=5, workspace_root="/w")
+    broker = PermissionBroker(PermissionRegistry(), bot, 1, timeout=5, workspace_root="/w")
     result = await _ask(broker, ALLOW)
 
     assert isinstance(result, PermissionResultAllow)
@@ -54,7 +47,7 @@ async def test_allow_returns_the_original_input(bot, config):
 
 
 async def test_deny_lets_the_agent_continue(bot, config):
-    broker = PermissionBroker(bot, 1, timeout=5, workspace_root="/w")
+    broker = PermissionBroker(PermissionRegistry(), bot, 1, timeout=5, workspace_root="/w")
     result = await _ask(broker, DENY)
 
     assert isinstance(result, PermissionResultDeny)
@@ -63,7 +56,7 @@ async def test_deny_lets_the_agent_continue(bot, config):
 
 
 async def test_deny_and_stop_interrupts(bot, config):
-    broker = PermissionBroker(bot, 1, timeout=5, workspace_root="/w")
+    broker = PermissionBroker(PermissionRegistry(), bot, 1, timeout=5, workspace_root="/w")
     result = await _ask(broker, STOP)
 
     assert isinstance(result, PermissionResultDeny)
@@ -71,7 +64,7 @@ async def test_deny_and_stop_interrupts(bot, config):
 
 
 async def test_always_allow_skips_later_prompts(bot, config):
-    broker = PermissionBroker(bot, 1, timeout=5, workspace_root="/w")
+    broker = PermissionBroker(PermissionRegistry(), bot, 1, timeout=5, workspace_root="/w")
     await _ask(broker, ALWAYS)
     assert broker.always_allow == {"Bash"}
 
@@ -83,7 +76,7 @@ async def test_always_allow_skips_later_prompts(bot, config):
 
 
 async def test_timeout_denies_and_interrupts(bot, config):
-    broker = PermissionBroker(bot, 1, timeout=0.05, workspace_root="/w")
+    broker = PermissionBroker(PermissionRegistry(), bot, 1, timeout=0.05, workspace_root="/w")
     result = await broker("Write", {"file_path": "/w/x"}, _context())
 
     assert isinstance(result, PermissionResultDeny)
@@ -93,13 +86,13 @@ async def test_timeout_denies_and_interrupts(bot, config):
 
 
 async def test_stale_button_press_is_ignored(bot, config):
-    broker = PermissionBroker(bot, 1, timeout=5, workspace_root="/w")
+    broker = PermissionBroker(PermissionRegistry(), bot, 1, timeout=5, workspace_root="/w")
     await _ask(broker, ALLOW)
-    assert PermissionBroker.dispatch("deadbeefcafe", ALLOW) is None
+    assert broker._registry.dispatch("deadbeefcafe", ALLOW) is None
 
 
 async def test_cancel_all_denies_everything_waiting(bot, config):
-    broker = PermissionBroker(bot, 1, timeout=5, workspace_root="/w")
+    broker = PermissionBroker(PermissionRegistry(), bot, 1, timeout=5, workspace_root="/w")
     task = asyncio.create_task(broker("Bash", {"command": "sleep 1"}, _context()))
     for _ in range(200):
         if broker._pending:
@@ -114,14 +107,14 @@ async def test_cancel_all_denies_everything_waiting(bot, config):
 
 
 async def test_the_prompt_is_edited_to_show_the_outcome(bot, config):
-    broker = PermissionBroker(bot, 1, timeout=5, workspace_root="/w")
+    broker = PermissionBroker(PermissionRegistry(), bot, 1, timeout=5, workspace_root="/w")
     await _ask(broker, ALLOW)
     assert bot.edits
     assert "allowed" in bot.edits[-1][1]
 
 
 async def test_a_reason_that_repeats_the_body_is_not_echoed(bot, config):
-    broker = PermissionBroker(bot, 1, timeout=5, workspace_root="/w")
+    broker = PermissionBroker(PermissionRegistry(), bot, 1, timeout=5, workspace_root="/w")
     context = _context()
     context.decision_reason = "note.txt"
 
@@ -136,7 +129,7 @@ async def test_a_reason_that_repeats_the_body_is_not_echoed(bot, config):
 
 
 async def test_a_distinct_reason_is_shown(bot, config):
-    broker = PermissionBroker(bot, 1, timeout=5, workspace_root="/w")
+    broker = PermissionBroker(PermissionRegistry(), bot, 1, timeout=5, workspace_root="/w")
     context = _context()
     context.decision_reason = "writes outside the project root"
 

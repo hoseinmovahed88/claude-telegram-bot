@@ -43,12 +43,46 @@ class _Pending:
     message_id: int | None = None
 
 
+class PermissionRegistry:
+    """Routes button presses back to the request that is waiting for them.
+
+    One registry per bot: a press on one bot can never resolve another bot's
+    pending request, even though both run in the same process.
+    """
+
+    def __init__(self) -> None:
+        self._brokers: dict[str, PermissionBroker] = {}
+
+    def register(self, request_id: str, broker: PermissionBroker) -> None:
+        self._brokers[request_id] = broker
+
+    def forget(self, request_id: str) -> None:
+        self._brokers.pop(request_id, None)
+
+    def dispatch(self, request_id: str, action: str) -> str | None:
+        """Resolve a pending request. Returns a human label, or None if unknown/stale."""
+        broker = self._brokers.get(request_id)
+        if broker is None:
+            return None
+        return broker.resolve(request_id, action)
+
+    def pending_count(self) -> int:
+        return len(self._brokers)
+
+
 class PermissionBroker:
     """Bridges the SDK's permission callback to Telegram inline buttons."""
 
-    _registry: dict[str, PermissionBroker] = {}
-
-    def __init__(self, bot, chat_id: int, *, timeout: float, workspace_root: str) -> None:
+    def __init__(
+        self,
+        registry: PermissionRegistry,
+        bot,
+        chat_id: int,
+        *,
+        timeout: float,
+        workspace_root: str,
+    ) -> None:
+        self._registry = registry
         self._bot = bot
         self._chat_id = chat_id
         self._timeout = timeout
@@ -56,17 +90,7 @@ class PermissionBroker:
         self._pending: dict[str, _Pending] = {}
         self.always_allow: set[str] = set()
 
-    # -- lookup used by the single global CallbackQueryHandler ---------------
-
-    @classmethod
-    def dispatch(cls, request_id: str, action: str) -> str | None:
-        """Resolve a pending request. Returns a human label, or None if unknown/stale."""
-        broker = cls._registry.get(request_id)
-        if broker is None:
-            return None
-        return broker._resolve(request_id, action)
-
-    def _resolve(self, request_id: str, action: str) -> str | None:
+    def resolve(self, request_id: str, action: str) -> str | None:
         pending = self._pending.get(request_id)
         if pending is None or pending.future.done():
             return None
@@ -78,7 +102,8 @@ class PermissionBroker:
         for request_id, pending in list(self._pending.items()):
             if not pending.future.done():
                 pending.future.set_result(DENY)
-            self._registry.pop(request_id, None)
+            self._registry.forget(request_id)
+        self._pending.clear()
         if reason:
             log.debug("cancelled pending permissions for chat %s: %s", self._chat_id, reason)
 
@@ -97,7 +122,7 @@ class PermissionBroker:
         loop = asyncio.get_running_loop()
         pending = _Pending(future=loop.create_future(), tool_name=tool_name)
         self._pending[request_id] = pending
-        self._registry[request_id] = self
+        self._registry.register(request_id, self)
 
         body = describe_tool_use(tool_name, tool_input, self._root)
         reason = context.decision_reason or context.description
@@ -171,7 +196,7 @@ class PermissionBroker:
 
     def _forget(self, request_id: str) -> None:
         self._pending.pop(request_id, None)
-        self._registry.pop(request_id, None)
+        self._registry.forget(request_id)
 
     async def _finalise(
         self, pending: _Pending, prompt: str, action: str, timed_out: bool

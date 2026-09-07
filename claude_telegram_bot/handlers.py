@@ -18,8 +18,7 @@ from telegram.ext import (
     filters,
 )
 
-from .config import PERMISSION_MODES, Config
-from .permissions import PermissionBroker
+from .config import PERMISSION_MODES, BotConfig
 from .render import esc, truncate
 from .session import SessionBusy, SessionManager
 from .sink import TelegramSink
@@ -69,10 +68,11 @@ async def unauthorised(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    config: Config = context.application.bot_data["config"]
+    config: BotConfig = context.application.bot_data["config"]
     await update.effective_message.reply_html(
         HELP.format(modes=" | ".join(PERMISSION_MODES))
-        + f"\n<i>workspace: <code>{esc(config.workspace_root)}</code></i>"
+        + f"\n<i>bot <code>{esc(config.name)}</code> \N{MIDDLE DOT} workspace "
+        f"<code>{esc(config.workspace_root)}</code></i>"
     )
 
 
@@ -80,8 +80,9 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     session = _session(update, context)
     state = session.state
     always = ", ".join(sorted(session.broker.always_allow)) or "none"
+    config: BotConfig = context.application.bot_data["config"]
     lines = [
-        "<b>Session</b>",
+        f"<b>Session</b> \N{MIDDLE DOT} bot <code>{esc(config.name)}</code>",
         f"id: <code>{esc(state.session_id or 'not started')}</code>",
         f"directory: <code>{esc(state.cwd)}</code>",
         f"model: <code>{esc(state.model or 'default')}</code>",
@@ -156,7 +157,7 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def change_dir(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    config: Config = context.application.bot_data["config"]
+    config: BotConfig = context.application.bot_data["config"]
     session = _session(update, context)
     if not context.args:
         await update.effective_message.reply_html(
@@ -276,7 +277,7 @@ async def context_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def on_permission_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    config: Config = context.application.bot_data["config"]
+    config: BotConfig = context.application.bot_data["config"]
     user = update.effective_user
     if user is None or user.id not in config.allowed_user_ids:
         await query.answer("Not your session.", show_alert=True)
@@ -286,7 +287,8 @@ async def on_permission_button(update: Update, context: ContextTypes.DEFAULT_TYP
     except ValueError:
         await query.answer("Malformed button.")
         return
-    label = PermissionBroker.dispatch(request_id, action)
+    manager: SessionManager = context.application.bot_data["sessions"]
+    label = manager.registry.dispatch(request_id, action)
     await query.answer(label or "That request already expired.")
 
 
@@ -310,7 +312,7 @@ async def _shutdown(application: Application) -> None:
     await manager.shutdown()
 
 
-def build_application(config: Config) -> Application:
+def build_application(config: BotConfig) -> Application:
     only_allowed = filters.User(user_id=list(config.allowed_user_ids))
 
     application = (

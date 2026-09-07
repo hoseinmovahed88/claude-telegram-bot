@@ -6,6 +6,7 @@ import asyncio
 import logging
 import re
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -27,8 +28,8 @@ from claude_agent_sdk import (
     UserMessage,
 )
 
-from .config import Config
-from .permissions import PermissionBroker
+from .config import BotConfig
+from .permissions import PermissionBroker, PermissionRegistry
 from .render import (
     describe_tool_use,
     esc,
@@ -81,7 +82,13 @@ class SessionBusy(RuntimeError):
 class ChatSession:
     """Owns the SDK client for a single chat and renders its output."""
 
-    def __init__(self, chat_id: int, bot, config: Config) -> None:
+    def __init__(
+        self,
+        chat_id: int,
+        bot,
+        config: BotConfig,
+        registry: PermissionRegistry | None = None,
+    ) -> None:
         self.chat_id = chat_id
         self.config = config
         self.state = SessionState(
@@ -91,6 +98,7 @@ class ChatSession:
             verbose=config.verbose_default,
         )
         self.broker = PermissionBroker(
+            registry if registry is not None else PermissionRegistry(),
             bot,
             chat_id,
             timeout=config.permission_timeout,
@@ -111,7 +119,12 @@ class ChatSession:
     # -- lifecycle -----------------------------------------------------------
 
     def _build_options(self) -> ClaudeAgentOptions:
+        # The CLI adopts CLAUDE_CODE_SESSION_ID from its environment, so every
+        # bot and chat launched from one parent would otherwise share a single
+        # session id. Name each fresh session explicitly instead.
+        fresh_id = None if self.state.resume_from else str(uuid.uuid4())
         return ClaudeAgentOptions(
+            session_id=fresh_id,
             cwd=str(self.state.cwd),
             model=self.state.model,
             permission_mode=self.state.permission_mode,
@@ -127,7 +140,7 @@ class ChatSession:
                 "preset": "claude_code",
                 "append": SYSTEM_PROMPT_APPEND,
             },
-            stderr=lambda line: log.debug("cli[%s]: %s", self.chat_id, line.rstrip()),
+            stderr=lambda line: log.debug("cli[%s/%s]: %s", self.config.name, self.chat_id, line.rstrip()),
         )
 
     async def _ensure_client(self) -> ClaudeSDKClient:
@@ -334,16 +347,22 @@ class ChatSession:
 
 
 class SessionManager:
-    """Keeps one ChatSession per chat id."""
+    """Keeps one ChatSession per chat id, for exactly one bot.
 
-    def __init__(self, config: Config) -> None:
+    Each bot builds its own manager and its own permission registry, so two
+    bots in the same process share no sessions, no grants and no pending
+    permission requests.
+    """
+
+    def __init__(self, config: BotConfig) -> None:
         self.config = config
+        self.registry = PermissionRegistry()
         self._sessions: dict[int, ChatSession] = {}
 
     def get(self, chat_id: int, bot) -> ChatSession:
         session = self._sessions.get(chat_id)
         if session is None:
-            session = ChatSession(chat_id, bot, self.config)
+            session = ChatSession(chat_id, bot, self.config, self.registry)
             self._sessions[chat_id] = session
         return session
 

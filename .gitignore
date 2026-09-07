@@ -3,5 +3,6 @@ venv/
 __pycache__/
 *.py[cod]
 .env
+bots.toml
 *.log
 .claude/

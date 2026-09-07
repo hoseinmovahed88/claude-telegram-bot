@@ -1,0 +1,52 @@
+# Several bots, one process. Copy to bots.toml and edit.
+#
+# Each bot is a separate bot in Telegram with its own token, its own workspace
+# and its own Claude session. Nothing is shared between them at runtime -- not
+# sessions, not "always allow" grants, not pending permission requests -- so two
+# projects never bleed into each other.
+#
+# If bots.toml is absent, the bot falls back to single-bot mode from .env.
+
+[defaults]
+# Applies to every bot below; any bot may override any of these.
+
+# REQUIRED. Numeric Telegram user IDs allowed to use these bots.
+# Each bot hands whoever is listed here shell access to its workspace.
+# Get your ID from @userinfobot.
+allowed_user_ids = [11111111]
+
+# default | acceptEdits | plan | dontAsk | bypassPermissions | auto
+# "default" asks you in Telegram before every tool call.
+permission_mode = "default"
+
+# Seconds to wait for a permission answer before auto-denying.
+permission_timeout = 300
+
+# model = "claude-opus-5"
+# effort = "high"                     # low | medium | high | xhigh | max
+# allowed_tools = ["Read", "Glob"]    # run without asking you
+# disallowed_tools = []               # never available
+# max_turns = 40
+# verbose = false                     # show thinking and tool results
+
+
+# One table per bot. The table name is the bot's name in /status and the logs.
+
+[bots.work]
+# Keep tokens out of the file with token_env; it reads the variable at startup
+# (a .env file next to bots.toml is loaded first).
+token_env = "WORK_BOT_TOKEN"
+workspace = "~/code/work"
+
+[bots.blog]
+token_env = "BLOG_BOT_TOKEN"
+workspace = "~/writing/blog"
+permission_mode = "acceptEdits"
+model = "claude-sonnet-5"
+
+[bots.scratch]
+# token = "123456:ABC-DEF..."   # inline is allowed, but prefer token_env
+token_env = "SCRATCH_BOT_TOKEN"
+workspace = "~/scratch"
+allowed_tools = ["Read", "Glob", "Grep"]
+verbose = true
