@@ -271,3 +271,65 @@ def test_the_token_is_redacted_for_logs(tmp_path):
     (config,) = load_configs()
     assert config.redacted_token() == "111:***"
     assert "supersecret" not in config.redacted_token()
+
+
+# ------------------------------------------------------------- access scoping
+
+
+def test_private_chats_only_is_the_default(tmp_path):
+    _toml(
+        tmp_path,
+        '[defaults]\nallowed_user_ids = [42]\n\n'
+        '[bots.work]\ntoken = "1:a"\nworkspace = "w"\n',
+    )
+    (config,) = load_configs()
+    assert config.allowed_chat_ids == frozenset()
+    assert config.reply_to_strangers is False
+
+
+def test_chats_can_be_opted_in_per_bot(tmp_path):
+    _toml(
+        tmp_path,
+        """
+        [defaults]
+        allowed_user_ids = [42]
+
+        [bots.work]
+        token = "1:a"
+        workspace = "w"
+        allowed_chat_ids = [-100123]
+        reply_to_strangers = true
+
+        [bots.blog]
+        token = "2:b"
+        workspace = "b"
+        """,
+    )
+    work, blog = load_configs()
+    assert work.allowed_chat_ids == frozenset({-100123})
+    assert work.reply_to_strangers is True
+    # Not inherited sideways from another bot.
+    assert blog.allowed_chat_ids == frozenset()
+    assert blog.reply_to_strangers is False
+
+
+def test_non_numeric_chat_ids_are_rejected(tmp_path):
+    _toml(
+        tmp_path,
+        '[defaults]\nallowed_user_ids = [42]\n\n'
+        '[bots.work]\ntoken = "1:a"\nworkspace = "w"\nallowed_chat_ids = ["mygroup"]\n',
+    )
+    with pytest.raises(ConfigError, match="allowed_chat_ids"):
+        load_configs()
+
+
+def test_env_mode_supports_the_same_scoping(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "1:x")
+    monkeypatch.setenv("TELEGRAM_ALLOWED_USER_IDS", "42")
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_IDS", "-100123, -100456")
+    monkeypatch.setenv("TELEGRAM_REPLY_TO_STRANGERS", "1")
+
+    (config,) = load_configs()
+
+    assert config.allowed_chat_ids == frozenset({-100123, -100456})
+    assert config.reply_to_strangers is True

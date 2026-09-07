@@ -10,10 +10,21 @@
 [defaults]
 # Applies to every bot below; any bot may override any of these.
 
-# REQUIRED. Numeric Telegram user IDs allowed to use these bots.
-# Each bot hands whoever is listed here shell access to its workspace.
+# REQUIRED. Numeric Telegram user IDs allowed to use these bots. Nobody else
+# can, and everyone else is ignored in silence. Each bot hands whoever is
+# listed here shell access to its workspace, so keep it to yourself.
 # Get your ID from @userinfobot.
 allowed_user_ids = [11111111]
+
+# Where the bot may be used. Left unset (the default), only private chats
+# work -- in a group every member would read the session output: file
+# contents, command output, everything. Set it to opt a specific group in.
+# allowed_chat_ids = [-1001234567890]
+
+# Answer people who are not on the allow-list, telling them their user id.
+# Off by default: a reply confirms to a stranger that the bot is live. Every
+# attempt is logged either way, which is how you get someone's id to add them.
+# reply_to_strangers = false
 
 # default | acceptEdits | plan | dontAsk | bypassPermissions | auto
 # "default" asks you in Telegram before every tool call.

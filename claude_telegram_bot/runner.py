@@ -25,7 +25,17 @@ async def _start(application: Application, config: BotConfig) -> None:
     await application.initialize()
     me = await application.bot.get_me()
     await application.start()
-    await application.updater.start_polling(drop_pending_updates=True)
+    await application.updater.start_polling(
+        drop_pending_updates=True,
+        # Never even fetch the rest: no channel posts, no inline queries, no
+        # chat-member events, and no edits (an edit must not re-run a prompt).
+        allowed_updates=["message", "callback_query"],
+    )
+    where = (
+        "chats " + ", ".join(str(i) for i in sorted(config.allowed_chat_ids))
+        if config.allowed_chat_ids
+        else "private chats only"
+    )
     log.info(
         "bot %r polling as @%s | workspace=%s model=%s mode=%s",
         config.name,
@@ -33,6 +43,13 @@ async def _start(application: Application, config: BotConfig) -> None:
         config.workspace_root,
         config.model or "default",
         config.permission_mode,
+    )
+    log.info(
+        "bot %r is private to %d user id(s): %s | %s",
+        config.name,
+        len(config.allowed_user_ids),
+        ", ".join(str(i) for i in sorted(config.allowed_user_ids)),
+        where,
     )
 
 

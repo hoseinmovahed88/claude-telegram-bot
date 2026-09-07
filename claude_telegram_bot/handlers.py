@@ -57,13 +57,45 @@ def _session(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def unauthorised(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log every attempt; answer only if the owner asked us to.
+
+    Silence is the default: a reply confirms to a stranger that the bot is
+    live and listening. The log line carries what the owner needs to add
+    someone deliberately.
+    """
+    config: BotConfig = context.application.bot_data["config"]
     user = update.effective_user
-    log.warning("rejected user %s (%s)", user.id if user else "?", user.username if user else "?")
-    if update.effective_message:
+    chat = update.effective_chat
+    log.warning(
+        "bot %r rejected user id=%s username=%s in chat id=%s type=%s",
+        config.name,
+        user.id if user else "?",
+        user.username if user else "?",
+        chat.id if chat else "?",
+        chat.type if chat else "?",
+    )
+    if config.reply_to_strangers and update.effective_message:
         await update.effective_message.reply_text(
             "This bot is private. Your Telegram user id is "
-            f"{user.id if user else 'unknown'}; ask the owner to add it to "
-            "TELEGRAM_ALLOWED_USER_IDS."
+            f"{user.id if user else 'unknown'}."
+        )
+
+
+async def wrong_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """An allowed user, but somewhere the session must not be shown."""
+    config: BotConfig = context.application.bot_data["config"]
+    chat = update.effective_chat
+    log.warning(
+        "bot %r ignored an allowed user in chat id=%s type=%s",
+        config.name,
+        chat.id if chat else "?",
+        chat.type if chat else "?",
+    )
+    if update.effective_message:
+        await update.effective_message.reply_text(
+            "Not here — everyone in this chat would see the session output. "
+            "Message me privately instead. To use this chat anyway, add its id "
+            f"({chat.id if chat else '?'}) to allowed_chat_ids."
         )
 
 
@@ -312,8 +344,26 @@ async def _shutdown(application: Application) -> None:
     await manager.shutdown()
 
 
+def authorised_filter(config: BotConfig) -> filters.BaseFilter:
+    """Who, and where. Both halves matter.
+
+    An allow-listed user is still refused in a group chat unless that chat is
+    named explicitly, because the bot's replies carry file contents and command
+    output to everyone who can read the chat. Edits are excluded too: editing
+    an old message would silently re-run it as a new prompt.
+    """
+    who = filters.User(user_id=list(config.allowed_user_ids))
+    where = (
+        filters.Chat(chat_id=list(config.allowed_chat_ids))
+        if config.allowed_chat_ids
+        else filters.ChatType.PRIVATE
+    )
+    return who & where & ~filters.UpdateType.EDITED
+
+
 def build_application(config: BotConfig) -> Application:
     only_allowed = filters.User(user_id=list(config.allowed_user_ids))
+    authorised = authorised_filter(config)
 
     application = (
         ApplicationBuilder()
@@ -341,13 +391,15 @@ def build_application(config: BotConfig) -> Application:
         "context": context_usage,
     }
     for name, callback in commands.items():
-        application.add_handler(CommandHandler(name, callback, filters=only_allowed))
+        application.add_handler(CommandHandler(name, callback, filters=authorised))
 
     application.add_handler(CallbackQueryHandler(on_permission_button, pattern=r"^p:"))
     application.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND & only_allowed, on_message)
+        MessageHandler(filters.TEXT & ~filters.COMMAND & authorised, on_message)
     )
-    # Anything from anyone else lands here.
+    # An allow-listed user, but in a chat the session must not be shown in.
+    application.add_handler(MessageHandler(only_allowed & ~filters.UpdateType.EDITED, wrong_chat))
+    # Everyone else.
     application.add_handler(MessageHandler(~only_allowed, unauthorised))
 
     return application

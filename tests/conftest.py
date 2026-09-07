@@ -78,6 +78,8 @@ def config(tmp_path: Path) -> BotConfig:
         name="test",
         bot_token="1:test",
         allowed_user_ids=frozenset({42}),
+        allowed_chat_ids=frozenset(),
+        reply_to_strangers=False,
         workspace_root=tmp_path,
         model=None,
         permission_mode="default",

@@ -44,17 +44,33 @@ nothing shared between them.
 **This bot gives whoever can message it the ability to read, write, and execute
 code on the machine it runs on.** Treat the bot token like an SSH key.
 
-Three things stand between a Telegram message and your filesystem, and all
-three are on by default:
+Four things stand between a Telegram message and your filesystem, and all
+four are on by default:
 
-1. **An allow-list.** `TELEGRAM_ALLOWED_USER_IDS` is mandatory — the bot
-   refuses to start without it. Everyone else gets a rejection.
-2. **A workspace.** Sessions run inside `CLAUDE_WORKSPACE` and `/cd` cannot
-   escape it. Point it at a scratch directory, not at `$HOME`.
-3. **Per-tool approval.** In the default permission mode every tool call waits
-   for you to tap ✅ in Telegram, and auto-denies after `PERMISSION_TIMEOUT`.
+1. **An allow-list.** Only the numeric user ids you name may use the bot; it
+   refuses to start without one. Everyone else is ignored in silence — a reply
+   would confirm to a stranger that the bot is live — while every attempt is
+   logged with the sender's id and username, which is how you get someone's id
+   if you do want to add them. Set `reply_to_strangers` to answer instead.
+2. **Private chats only.** An allow-listed user is still refused in a group,
+   because the bot's replies carry file contents and command output to
+   everyone who can read the chat. Name a chat in `allowed_chat_ids` to opt it
+   in deliberately; doing so replaces the private-only default rather than
+   adding to it, and still admits only allow-listed users.
+3. **A workspace.** Sessions run inside the bot's `workspace` and `/cd` cannot
+   escape it. Point it at a project directory, not at `$HOME`.
+4. **Per-tool approval.** In the default permission mode every tool call waits
+   for you to tap ✅ in Telegram, and auto-denies after `permission_timeout`.
 
-`/mode bypassPermissions` removes the third one. Don't leave it on.
+`/mode bypassPermissions` removes the fourth one. Don't leave it on.
+
+Two more things worth knowing. Editing an old message does **not** re-run it
+as a prompt, and the bot subscribes only to `message` and `callback_query`
+updates, so channel posts, inline queries and chat-member events never reach
+it at all. And the bot token is itself a credential: anyone holding it can
+read the updates addressed to your bot. Keep it out of the repo — `bots.toml`
+and `.env` are both git-ignored, and `token_env` keeps the token out of the
+config file entirely.
 
 Running the whole thing inside a container or a VM is the safe way to use it.
 
@@ -178,6 +194,8 @@ single-bot fallback (see `.env.example`).
 | `token` / `token_env` | per bot | **Required.** The token, or the env var holding it |
 | `workspace` | per bot | **Required.** Directory that bot is confined to |
 | `allowed_user_ids` | either | **Required.** Numeric Telegram user ids |
+| `allowed_chat_ids` | either | Chats the bot may be used in (default: private chats only) |
+| `reply_to_strangers` | either | Answer non-allow-listed users instead of ignoring them |
 | `permission_mode` | either | `default`, `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions`, `auto` |
 | `model`, `effort` | either | Model id and reasoning effort |
 | `allowed_tools` | either | Tools approved without asking |
@@ -196,6 +214,8 @@ setting.
 | --- | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | — | **Required.** BotFather token |
 | `TELEGRAM_ALLOWED_USER_IDS` | — | **Required.** Comma-separated user ids |
+| `TELEGRAM_ALLOWED_CHAT_IDS` | *(private only)* | Chats the bot may be used in |
+| `TELEGRAM_REPLY_TO_STRANGERS` | `0` | Answer non-allow-listed users |
 | `ANTHROPIC_API_KEY` | — | Passed to the CLI; or run `claude login` |
 | `BOT_NAME` | `default` | Name shown in `/status` and the logs |
 | `CLAUDE_WORKSPACE` | `./workspace` | Directory the agent is confined to |
@@ -277,9 +297,9 @@ pytest
 
 The tests replace Telegram with a recording fake and the SDK client with a
 canned transcript, so the whole suite runs offline in about two seconds — no
-bot token and no API key needed. `tests/test_isolation.py` is the one that
-pins the multi-bot guarantees; `tests/test_runner.py` covers the start/stop
-lifecycle.
+bot token and no API key needed. `tests/test_access.py` pins the security
+boundary against real `telegram.Update` objects, `tests/test_isolation.py` the
+multi-bot guarantees, and `tests/test_runner.py` the start/stop lifecycle.
 
 ---
 

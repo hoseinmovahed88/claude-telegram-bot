@@ -32,6 +32,8 @@ DEFAULT_CONFIG_FILE = "bots.toml"
 _SHARED_KEYS = frozenset(
     {
         "allowed_user_ids",
+        "allowed_chat_ids",
+        "reply_to_strangers",
         "model",
         "permission_mode",
         "effort",
@@ -68,6 +70,10 @@ class BotConfig:
     name: str
     bot_token: str
     allowed_user_ids: frozenset[int]
+    # Empty means "private chats only" -- the safe default. Naming chats here
+    # opts a specific group in, and everyone in it then reads the session.
+    allowed_chat_ids: frozenset[int]
+    reply_to_strangers: bool
     workspace_root: Path
     model: str | None
     permission_mode: str
@@ -100,6 +106,15 @@ def _check_effort(effort: str | None, where: str) -> str | None:
             f"{where}: effort={effort!r} is not one of {', '.join(EFFORT_LEVELS)}."
         )
     return effort
+
+
+def _check_chats(chat_ids: Any, where: str) -> frozenset[int]:
+    if not chat_ids:
+        return frozenset()
+    try:
+        return frozenset(int(value) for value in chat_ids)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"{where}: allowed_chat_ids must be numeric ({exc}).") from None
 
 
 def _check_users(user_ids: Any, where: str) -> frozenset[int]:
@@ -206,6 +221,8 @@ def _one_from_toml(
         name=name,
         bot_token=token,
         allowed_user_ids=_check_users(merged.get("allowed_user_ids"), where),
+        allowed_chat_ids=_check_chats(merged.get("allowed_chat_ids"), where),
+        reply_to_strangers=bool(merged.get("reply_to_strangers", False)),
         workspace_root=_prepare_workspace(merged.get("workspace"), base, where),
         model=(str(merged["model"]).strip() or None) if merged.get("model") else None,
         permission_mode=_check_mode(str(merged.get("permission_mode") or "default"), where),
@@ -246,6 +263,8 @@ def _from_env() -> BotConfig:
         name=(os.getenv("BOT_NAME") or "default").strip(),
         bot_token=token,
         allowed_user_ids=_check_users(_csv(os.getenv("TELEGRAM_ALLOWED_USER_IDS")), where),
+        allowed_chat_ids=_check_chats(_csv(os.getenv("TELEGRAM_ALLOWED_CHAT_IDS")), where),
+        reply_to_strangers=_bool(os.getenv("TELEGRAM_REPLY_TO_STRANGERS")),
         workspace_root=_prepare_workspace(
             os.getenv("CLAUDE_WORKSPACE") or "./workspace", Path.cwd(), where
         ),
